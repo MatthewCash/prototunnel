@@ -1,13 +1,15 @@
 use anyhow::{bail, Result};
 use clap::Parser;
 use ipnet::Ipv4Net;
-use std::{net::SocketAddr, os::fd::AsRawFd};
+use log::{debug, error, info};
+use std::{net::SocketAddr, os::fd::AsRawFd, pin::Pin};
 use tokio::{
     io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, UdpSocket},
     task, try_join,
 };
 use tokio_tun::Tun;
+use udp_stream::UdpStream;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -24,28 +26,38 @@ struct Args {
     #[arg(short, long, conflicts_with = "server")]
     client: Option<SocketAddr>,
 
+    #[arg(short, long, default_value_t = false)]
+    tcp: bool,
+
     #[arg(short, long, default_value_t = 1500)]
     mtu: u16,
 }
 
+pub trait AsyncReadWrite: AsyncRead + AsyncWrite {}
+impl<T> AsyncReadWrite for T where T: AsyncRead + AsyncWrite {}
+
 async fn pipe(
-    mut reader: impl AsyncRead + Unpin,
-    mut writer: impl AsyncWrite + Unpin,
+    mut reader: Box<dyn AsyncRead + Unpin + Send>,
+    mut writer: Box<dyn AsyncWrite + Unpin + Send>,
     mtu: u16,
 ) -> Result<()> {
     let mut buf = vec![0u8; mtu as usize + 4]; // 4 bytes for packet info
 
     loop {
-        let read_bytes = reader.read(&mut buf).await?;
-        let sent_bytes = writer.write(&buf[..read_bytes]).await?;
-        if read_bytes != sent_bytes {
-            bail!("Read {read_bytes} bytes but sent {sent_bytes} bytes!");
+        let bytes_read = reader.read(&mut buf).await?;
+        let bytes_sent = writer.write(&buf[..bytes_read]).await?;
+        if bytes_read != bytes_sent {
+            bail!("Read {bytes_read} bytes but sent {bytes_sent} bytes!");
         }
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init_from_env(
+        env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"),
+    );
+
     let args = Args::parse();
 
     let tun = Tun::builder()
@@ -57,25 +69,43 @@ async fn main() -> Result<()> {
         .up()
         .try_build()?;
 
-    println!("tun created, name: {}, fd: {}", tun.name(), tun.as_raw_fd());
+    debug!("tun ({}) created with fd {}", tun.name(), tun.as_raw_fd());
 
-    let tcp_stream = if let Some(host) = args.server {
-        TcpListener::bind(host).await?.accept().await?.0
+    let sock_stream: Pin<Box<dyn AsyncReadWrite + Send>> = if let Some(host) = args.server {
+        if args.tcp {
+            Box::pin(TcpListener::bind(host).await?.accept().await?.0)
+        } else {
+            let socket = UdpSocket::bind(host).await?;
+            let (_, addr) = socket.recv_from(&mut []).await?;
+            Box::pin(UdpStream::from_tokio(socket, addr).await?)
+        }
     } else if let Some(host) = args.client {
-        TcpStream::connect(host).await?
+        if args.tcp {
+            Box::pin(TcpStream::connect(host).await?)
+        } else {
+            Box::pin(UdpStream::connect(host).await?)
+        }
     } else {
         bail!("Either client or server operation must be specified!");
     };
 
-    let (sock_reader, sock_writer) = split(tcp_stream);
+    info!("Transport stream established!");
+
+    let (sock_reader, sock_writer) = split(sock_stream);
     let (tun_reader, tun_writer) = split(tun);
 
-    try_join!(
-        task::spawn(pipe(sock_reader, tun_writer, args.mtu)),
-        task::spawn(pipe(tun_reader, sock_writer, args.mtu))
+    let tasks = try_join!(
+        task::spawn(pipe(Box::new(sock_reader), Box::new(tun_writer), args.mtu)),
+        task::spawn(pipe(Box::new(tun_reader), Box::new(sock_writer), args.mtu))
     )?;
 
-    println!("done?");
+    if let Err(why) = tasks.0 {
+        error!("{:?}", why.context("Failed to read from socket to tun!"));
+    }
+
+    if let Err(why) = tasks.1 {
+        error!("{:?}", why.context("Failed to read from tun to socket!"));
+    }
 
     Ok(())
 }
