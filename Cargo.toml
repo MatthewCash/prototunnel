@@ -1,0 +1,13 @@
+[package]
+name = "prototunnel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.89"
+bitcode = "0.6.3"
+clap = { version = "4.5.18", features = ["derive"] }
+ipnet = "2.10.0"
+serde = "1.0.210"
+tokio = { version = "1.40.0", features = ["full"] }
+tokio-tun = "0.12.0"
