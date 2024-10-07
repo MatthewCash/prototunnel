@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use clap::Parser;
 use ipnet::Ipv4Net;
 use log::{debug, error, info};
-use std::{net::SocketAddr, os::fd::AsRawFd, pin::Pin};
+use std::{net::SocketAddr, os::fd::AsRawFd};
 use tokio::{
     io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
@@ -71,19 +71,19 @@ async fn main() -> Result<()> {
 
     debug!("tun ({}) created with fd {}", tun.name(), tun.as_raw_fd());
 
-    let sock_stream: Pin<Box<dyn AsyncReadWrite + Send>> = if let Some(host) = args.server {
+    let sock_stream: Box<dyn AsyncReadWrite + Send + Unpin> = if let Some(host) = args.server {
         if args.tcp {
-            Box::pin(TcpListener::bind(host).await?.accept().await?.0)
+            Box::new(TcpListener::bind(host).await?.accept().await?.0)
         } else {
             let socket = UdpSocket::bind(host).await?;
             let (_, addr) = socket.recv_from(&mut []).await?;
-            Box::pin(UdpStream::from_tokio(socket, addr).await?)
+            Box::new(UdpStream::from_tokio(socket, addr).await?)
         }
     } else if let Some(host) = args.client {
         if args.tcp {
-            Box::pin(TcpStream::connect(host).await?)
+            Box::new(TcpStream::connect(host).await?)
         } else {
-            Box::pin(UdpStream::connect(host).await?)
+            Box::new(UdpStream::connect(host).await?)
         }
     } else {
         bail!("Either client or server operation must be specified!");
