@@ -8,6 +8,7 @@ anyhow = "1.0.89"
 bitcode = "0.6.3"
 clap = { version = "4.5.18", features = ["derive"] }
 env_logger = "0.11.5"
+futures = "0.3.30"
 ipnet = "2.10.0"
 log = "0.4.22"
 serde = "1.0.210"

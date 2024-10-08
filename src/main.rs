@@ -1,12 +1,14 @@
 use anyhow::{bail, Result};
 use clap::Parser;
+use futures::future;
 use ipnet::Ipv4Net;
 use log::{debug, error, info};
 use std::{net::SocketAddr, os::fd::AsRawFd};
 use tokio::{
     io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
-    task, try_join,
+    task,
+};
 };
 use tokio_tun::Tun;
 use udp_stream::UdpStream;
@@ -94,18 +96,15 @@ async fn main() -> Result<()> {
     let (sock_reader, sock_writer) = split(sock_stream);
     let (tun_reader, tun_writer) = split(tun);
 
-    let tasks = try_join!(
+    future::try_join_all([
         task::spawn(pipe(Box::new(sock_reader), Box::new(tun_writer), args.mtu)),
-        task::spawn(pipe(Box::new(tun_reader), Box::new(sock_writer), args.mtu))
-    )?;
-
-    if let Err(why) = tasks.0 {
-        error!("{:?}", why.context("Failed to read from socket to tun!"));
-    }
-
-    if let Err(why) = tasks.1 {
-        error!("{:?}", why.context("Failed to read from tun to socket!"));
-    }
+        task::spawn(pipe(Box::new(tun_reader), Box::new(sock_writer), args.mtu)),
+    ])
+    .await
+    .expect("Failed to start pipes")
+    .iter_mut()
+    .filter_map(|res| res.as_ref().err())
+    .for_each(|why| error!("{:?}", why));
 
     Ok(())
 }
