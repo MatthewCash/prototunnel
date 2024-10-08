@@ -22,10 +22,10 @@ struct Args {
     #[arg(short, long, default_value = "prototun")]
     name: String,
 
-    #[arg(short, long, conflicts_with = "client")]
+    #[arg(short, long, value_name = "ADDRESS", conflicts_with = "client")]
     server: Option<SocketAddr>,
 
-    #[arg(short, long, conflicts_with = "server")]
+    #[arg(short, long, value_name = "ADDRESS", conflicts_with = "server")]
     client: Option<SocketAddr>,
 
     #[arg(short, long, default_value_t = false)]
