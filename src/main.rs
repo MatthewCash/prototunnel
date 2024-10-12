@@ -43,7 +43,7 @@ async fn pipe(
     mut writer: Box<dyn AsyncWrite + Unpin + Send>,
     mtu: u16,
 ) -> Result<()> {
-    let mut buf = vec![0u8; mtu as usize + 4]; // 4 bytes for packet info
+    let mut buf = vec![0u8; mtu as usize];
 
     loop {
         let bytes_read = reader.read(&mut buf).await?;
@@ -64,7 +64,6 @@ async fn main() -> Result<()> {
 
     let tun = Tun::builder()
         .name(&args.name)
-        .packet_info()
         .address(args.address.addr())
         .netmask(args.address.netmask())
         .mtu(args.mtu as i32)
